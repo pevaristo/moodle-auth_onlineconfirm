@@ -36,7 +36,7 @@ class auth_plugin_onlineconfirm extends auth_plugin_base {
      */
     public function __construct() {
         $this->authtype = 'onlineconfirm';
-        $this->config = get_config('auth/onlineconfirm');
+        $this->config = get_config('auth_onlineconfirm');
     }
 
     /**
@@ -47,13 +47,6 @@ class auth_plugin_onlineconfirm extends auth_plugin_base {
     public function auth_plugin_onlineconfirm() {
         debugging('Use of class name as constructor is deprecated', DEBUG_DEVELOPER);
         self::__construct();
-    }
-
-    public function pre_user_login_hook(&$user){
-        global $CFG;
-        if (!empty($user->suspended)) {
-            notice(get_string('suspendnotice', 'auth_onlineconfirm'), $CFG->wwwroot .'/auth/onlineconfirm/unlock_account.php?u='.$user->id);
-        }
     }
 
     /**
@@ -94,14 +87,6 @@ class auth_plugin_onlineconfirm extends auth_plugin_base {
         return true;
     }
 
-/* Override signup form charbusch by copying login/signup_form.php to this folder.
-    function signup_form() {
-        global $CFG;
-
-        require_once($CFG->dirroot.'/auth/'.$this->authtype.'/signup_form.php');
-        return new login_signup_form(null, null, 'post', '', array('autocomplete'=>'on'));
-    }
-*/
     /**
      * Sign up a new user ready for confirmation.
      * Password is passed in plaintext.
@@ -128,7 +113,7 @@ class auth_plugin_onlineconfirm extends auth_plugin_base {
      * @since Moodle 3.2
      */
     public function user_signup_with_confirmation($user, $notify=true, $confirmationurl = null) {
-        global $CFG, $DB;
+        global $CFG, $DB, $SESSION;
         require_once($CFG->dirroot.'/user/profile/lib.php');
         require_once($CFG->dirroot.'/user/lib.php');
 
@@ -144,6 +129,11 @@ class auth_plugin_onlineconfirm extends auth_plugin_base {
 
         // Save any custom profile field information.
         profile_save_data($user);
+
+        // Save wantsurl against user's profile, so we can return them there upon confirmation.
+        if (!empty($SESSION->wantsurl)) {
+            set_user_preference('auth_onlineconfirm_wantsurl', $SESSION->wantsurl, $user);
+        }
 
         // Trigger event.
         \core\event\user_created::create_from_userid($user->id)->trigger();
@@ -182,19 +172,22 @@ class auth_plugin_onlineconfirm extends auth_plugin_base {
             } else if ($user->secret == $confirmsecret) {   // They have provided the secret key to get in
                 $DB->set_field("user", "confirmed", 1, array("id"=>$user->id));
 
-				//Log them in before redirect.
-				complete_user_login($user);
-				if ($this->config->emailnew) {
-    				$this->email_new($user);
-    			}
+    // Log them in before redirect.
+                complete_user_login($user);
+                if ($this->config->emailnew) {
+                    $this->email_new($user);
+                }
 
-				//Do the redirect.
-    			$this->onlineconfirm_redirect($user);
+                // Do the redirect.
+                $this->onlineconfirm_redirect($user);
             }
         } else {
             return AUTH_CONFIRM_ERROR;
         }
     }
+
+
+
 
     function prevent_local_passwords() {
         return false;
@@ -257,35 +250,36 @@ class auth_plugin_onlineconfirm extends auth_plugin_base {
 
 	// Custom functions.
     /**
-     * Returns the user to site root logged in
+     * Returns the user to site root logged in or wantsurl
      *
      */
     function onlineconfirm_redirect($user) {
-        global $CFG;
+        global $CFG, $SESSION;
 
-    	redirect("$CFG->wwwroot/");
+        redirect($SESSION->wantsurl);
+        unset($SESSION->wantsurl);
     }
 
-	/**
-	 * Sends an email when a user signs up. 
-	 * First checks whether the option is set.
-	 *
-	 * @param stdClass $user
-	 * @param stdClass $SITE
-	 * @param stdClass $supportuser
-	 */
-	function email_new($user) {
+    /**
+     * Sends an email when a user registers. 
+     * First checks whether the option is set.
+     *
+     * @param stdClass $user
+     * @param stdClass $SITE
+     * @param stdClass $supportuser
+     */
+    function email_new($user) {
     global $CFG, $SITE;
 
-    if (empty($this->config->emailnew)) {          // No need to do anything
-            return(false);
+    if (empty($this->config->emailnew)) {    // No need to do anything
+        return(false);
     }
  
     $return = true;
     $emails = explode(',', $this->config->emailnew);
     $student = fullname($user);
     foreach ($emails as $email) {
-    	$userto = new stdClass();
+        $userto = new stdClass();
         $userto->mailformat = 1;
         // Dummy userid to keep email_to_user happy in moodle 2.6.
         $userto->id = -10;
@@ -295,9 +289,9 @@ class auth_plugin_onlineconfirm extends auth_plugin_base {
         $sitelink = html_writer::link(new moodle_url('/'), $SITE->fullname);
         $info->url = $sitelink;
         $info->email = $CFG->supportemail;
-     	$postsubject = get_string('email_new_subject', 'auth_onlineconfirm', $info);
-    	$posttext = get_string('email_new_message', 'auth_onlineconfirm', $info)."\n";
-    	$posthtml = text_to_html(get_string('email_new_message', 'auth_onlineconfirm', $info));
+        $postsubject = get_string('email_new_subject', 'auth_onlineconfirm', $info);
+        $posttext = get_string('email_new_message', 'auth_onlineconfirm', $info)."\n";
+        $posthtml = text_to_html(get_string('email_new_message', 'auth_onlineconfirm', $info));
         $supportuser =  core_user::get_support_user();
         $userfrom = $supportuser;
         if (email_to_user($userto, $userfrom, $postsubject, $posttext, $posthtml)) {
